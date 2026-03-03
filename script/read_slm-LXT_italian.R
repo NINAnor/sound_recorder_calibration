@@ -5,12 +5,7 @@ library(ggplot2)
 file_lxt <- "C:/Users/julia.wiel/OneDrive - NINA/Documents/CALIBRATION/analysis/data/raw/LxT_0003857-20260202 142124-LxT_Data.004.xlsx"
 slm_data <- readxl::read_excel(file_lxt, sheet = "Profilo storico")
 
-
-# Select 1/3 octave
-slm_data_3oct <- slm_data[1:8]
-slm_data_3oct <- cbind(slm_data_3oct, slm_data[21:56])
-
-freq_3oct <- c(8, 10, 12.5, 16, 20, 25, 31.5, 40, 50, 63, 80,
+freq_3oct <- c(6.3, 8, 10, 12.5, 16, 20, 25, 31.5, 40, 50, 63, 80,
           100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500,
           3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000, 20000)
 
@@ -21,7 +16,7 @@ freq_3oct <- c(8, 10, 12.5, 16, 20, 25, 31.5, 40, 50, 63, 80,
 row = 6
 
 # Select data
-resp <- slm_data_3oct[,10:44]
+resp <- slm_data[,8:43]
 
 freq_data <- data.frame(
   frequency = freq_3oct,
@@ -42,11 +37,11 @@ ggplot(freq_data, aes(x = frequency, y = response)) +
 #### Plot the mean of the frequency response over several rows ####
 
 # User enter rows of interest
-row_min = 25
-row_max = 30
+row_min = 1151
+row_max = 1154
 
 # Select data
-resp_chunk = resp <- slm_data_3oct[row_min:row_max,10:44]
+resp_chunk = resp <- slm_data[row_min:row_max,8:43]
 
 # Calculate mean and standard deviation for each column
 column_means <- colMeans(resp_chunk)
@@ -67,8 +62,12 @@ ggplot(freq_data, aes(x = frequency, y = response)) +
   scale_x_log10() +
   labs(x = "Frequency (Hz) - Log Scale", y = "Sound Level (dB)") + 
   ggtitle("SLM frequency-response", 
-          subtitle = paste("1/3 octave from 8Hz to 20000Hz for rows number: ", 
+          subtitle = paste("1/3 octave from 6.3Hz to 20000Hz for rows number: ", 
                            row_min, " - ", row_max))
+
+
+#### Equalize signal ####
+
 
 
 
