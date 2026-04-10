@@ -2,11 +2,10 @@
 title: "PAMGuide calibraition"
 format: html
 editor: visual
+author: Virginia Iorio
 ---
 
 ```{r, warning=FALSE}
-source('PAMGuide.R')
-
 library(tidyverse)
 library(readxl)
 library(tuneR)
@@ -20,7 +19,7 @@ write_results <- TRUE
 audio_data_folder <- "G:/Drive condivisi/Sound_recorder_calibration_DB/data/Audio/"
 slm_data_folder <- "G:/Drive condivisi/Sound_recorder_calibration_DB/data/SLM/raw/"
 output_folder <- "G:/Drive condivisi/Sound_recorder_calibration_DB/output"
-output_file <- "calibration_database"
+output_file <- "calibration_offset_database"
 ```
 
 Steps for calibration:
@@ -35,17 +34,7 @@ Steps for calibration:
 
 3.  Compute sensitivity factor ready to go in PAMGuide
 
-# 1. Create final database
-
-```{r}
-df <- data.frame(sensor = NA,
-                 calibration_test = NA,
-                 sensor_dB = NA,
-                 slm_dB = NA,
-                 calibration_offset = NA)
-```
-
-# 2. Calculate per sensor calibration value
+# Calculate per sensor calibration value
 
 Bespoke TOL function:
 
@@ -99,21 +88,36 @@ average_dB <- function(levels_dB) {
 
 ```
 
+Find SLM reference test rows:
+
+-   due to the SLM clock not being always synchronized need to manually check for the clap to correct for the time lag.
+
+-   Load the file
+
+-   Manually check for the clap, it should be a dB peak above the 30 dB, or look for roughly 100 (test with Julia) or 10 (WildSOUND calibration) lines before the actual tests start (i.e. consistent high levels of dB).
+
+```{r}
+date_test <- "2026-03-19"
+slm_test <- "038"
+
+slm_file <- list.files(paste0(slm_data_folder, gsub("-","",date_test)), pattern=paste0(slm_test,".xlsx"), full.names = TRUE)
+
+slm_dat <- readxl::read_excel(slm_file, sheet = "Profilo storico") %>% select("Tempo", "1/3 LZFeq 1000") %>% rename(SPL_1kHz = "1/3 LZFeq 1000")
+```
+
 Calibration test metadata:
 
 ```{r}
-
-calib_test <- "Calib0035"
-sensor <- "AMO84"
+calib_test <- "Calib0029"
+sensor <- "SM007"
 
 use_all_three_tests = TRUE
 
-date_test <- "2026-03-27"
+date_test <- "2026-03-19"
 
 # SLM reference test
-test_time <- "10:43:38"
-slm_test <- "043"
-# slm_time_mismatch <- 16 #seconds Introduced code to estimate this from the "clap" sound at the beginning of the test, still need to check if it works for all the tests!
+test_time <- "10:25:47"
+slm_test <- "038"
 
 WildSOUND_calibration <- FALSE #TRUE if the short audio file was used
 ```
@@ -127,7 +131,11 @@ Next bit of the code:
 
 ```{r}
 
-df_row <- df[1,]
+df <- data.frame(sensor = NA,
+                 calibration_test = NA,
+                 sensor_dB = NA,
+                 slm_dB = NA,
+                 calibration_offset = NA)
 
 ########################################
 #  1. Run TOL analysis and extract mean dB level recorded
@@ -171,9 +179,9 @@ mean_SPL_linear <- mean(SPL_linear)
 mean_SPL_dB <- 10*log10(mean_SPL_linear)
 
 #Append results to database
-df_row$sensor <- sensor
-df_row$calibration_test <- calib_test
-df_row$sensor_dB <- mean_SPL_dB
+df$sensor <- sensor
+df$calibration_test <- calib_test
+df$sensor_dB <- mean_SPL_dB
 
 ########################################
 #  2. Extract dB values from the SLM
@@ -183,37 +191,26 @@ slm_file <- list.files(paste0(slm_data_folder, gsub("-","",date_test)), pattern=
 
 slm_dat <- readxl::read_excel(slm_file, sheet = "Profilo storico") %>% select("Tempo", "1/3 LZFeq 1000") %>% rename(SPL_1kHz = "1/3 LZFeq 1000")
 
-# Find the clap of the beginning of the test to estimate any potential time mismatch. Use the difference in SPL to identify sudden peaks and then assume that is the closest one to the recorded test time
 test_time <- paste0(date_test," ",test_time) %>% as.POSIXct(., tz="UTC")
-  
-slm_dat <- slm_dat %>% mutate(diff = SPL_1kHz - lag(SPL_1kHz),
-                              time_to_test = difftime(Tempo, test_time) %>% as.numeric())
-  
-clap <- slm_dat %>%
-  arrange(desc(diff)) %>%
-  slice(1:30)
-n <- which.min(abs(clap$time_to_test))
-  
-time <- clap$Tempo[n]
 
 if(WildSOUND_calibration == TRUE){
-  time1_start <- time + 13
-  time1_end <- time + 32
+  time1_start <- test_time + 13
+  time1_end <- test_time + 32
     
-  time2_start <- time + 46 
-  time2_end <- time + 65
+  time2_start <- test_time + 46 
+  time2_end <- test_time + 65
     
-  time3_start <- time + 79
-  time3_end <- time + 98
+  time3_start <- test_time + 79
+  time3_end <- test_time + 98
 } else {
-    time1_start <- time + 108
-    time1_end <- time + 127
+    time1_start <- test_time + 108
+    time1_end <- test_time + 127
     
-    time2_start <- time + 140
-    time2_end <- time + 159
+    time2_start <- test_time + 140
+    time2_end <- test_time + 159
     
-    time3_start <- time + 172
-    time3_end <- time + 191
+    time3_start <- test_time + 172
+    time3_end <- test_time + 191
 
 }
   
@@ -224,29 +221,26 @@ slm3 <- slm_dat %>% dplyr::filter(Tempo >= time3_start & Tempo <= time3_end)
 x_slm <- c(average_dB(slm1$SPL_1kHz), average_dB(slm2$SPL_1kHz), average_dB(slm3$SPL_1kHz))
 x_slm <- average_dB(x_slm)
 
-df_row$slm_dB <- x_slm
+df$slm_dB <- x_slm
 
 ########################################
 #  3. Calculate calibration offset
 #######################################
 
 offset <- x_slm - mean_SPL_dB
-df_row$calibration_offset <- offset
+df$calibration_offset <- offset
 
 ########################################
 #  4. Write out results
 #######################################
 
-df <- rbind(df, df_row)
-df <- df %>% dplyr::filter(!is.na(sensor))
-
-#if(file.exists(paste0(output_folder,"/",output_file,".csv"))){
-#  df1 <- read.csv(paste0(output_folder,"/",output_file,".csv"))
-#  df1 <- rbind(df1, df)
-#  write.csv(df1, paste0(output_folder,"/",output_file,".csv")) 
-#} else {
-# write.csv(df, paste0(output_folder,"/",output_file,".csv")) 
-#}
+if(file.exists(paste0(output_folder,"/",output_file,".csv"))){
+  df1 <- read.csv(paste0(output_folder,"/",output_file,".csv"))
+  df1 <- rbind(df1, df)
+  write.csv(df1, paste0(output_folder,"/",output_file,".csv"), row.names = FALSE) 
+} else {
+ write.csv(df, paste0(output_folder,"/",output_file,".csv"), row.names = FALSE) 
+}
 
 ```
 
