@@ -61,19 +61,26 @@ The following code is used to:
 -   Manually check for the clap, it should be a dB peak above the 30 dB, or look for roughly 100 (test with Julia) or 10 (WildSOUND calibration) lines before the actual tests start (i.e. consistent high levels of dB).
 
 ```{r}
-date_test <- "2026-04-09"
-slm_test <- "049"
+date_test <- "2026-04-13"
+slm_test <- "091"
 
 slm_file <- list.files(paste0(slm_data_folder, gsub("-","",date_test)), pattern=paste0(slm_test,".xlsx"), full.names = TRUE)
 
-slm_dat <- readxl::read_excel(slm_file, sheet = "Profilo storico") %>% select("Tempo", "1/3 LZFeq 1000") %>% rename(SPL_1kHz = "1/3 LZFeq 1000")
+slm_dat <- readxl::read_excel(slm_file, sheet = 5)
+
+# Adjust for some outputs being in Italian and others in English
+if(colnames(slm_dat)[4] == "Tempo"){
+  slm_dat <- slm_dat %>% select("Tempo", "1/3 LZFeq 1000") %>% rename(SPL_1kHz = "1/3 LZFeq 1000")
+} else {
+  slm_dat <- slm_dat %>% select("Time", "1/3 LZFeq 1000") %>% rename(SPL_1kHz = "1/3 LZFeq 1000", Tempo = "Time")
+}
 ```
 
 ## 2. Insert calibration test metadata
 
 ```{r}
-calib_test <- "Calib0054"
-sensor <- "SM028"
+calib_test <- "Calib0059"
+sensor <- "SM021"
 
 use_all_three_tests = TRUE
 
@@ -155,9 +162,9 @@ slm_dat <- readxl::read_excel(slm_file, sheet = 5)
 
 # Adjust for some outputs being in Italian and others in English
 if(colnames(slm_dat)[4] == "Tempo"){
-  slm_dat <- slm_data <- select("Tempo", "1/3 LZFeq 1000") %>% rename(SPL_1kHz = "1/3 LZFeq 1000")
+  slm_dat <- slm_dat %>% select("Tempo", "1/3 LZFeq 1000") %>% rename(SPL_1kHz = "1/3 LZFeq 1000")
 } else {
-  slm_dat <- slm_data %>% select("Time", "1/3 LZFeq 1000") %>% rename(SPL_1kHz = "1/3 LZFeq 1000", Tempo = "Time")
+  slm_dat <- slm_dat %>% select("Time", "1/3 LZFeq 1000") %>% rename(SPL_1kHz = "1/3 LZFeq 1000", Tempo = "Time")
 }
 
 test_time <- paste0(date_test," ",test_time) %>% as.POSIXct(., tz="UTC")
@@ -190,10 +197,11 @@ slm3 <- slm_dat %>% dplyr::filter(Tempo >= time3_start & Tempo <= time3_end)
 # Avergae dB across the three tests
 slm_dB <- c(average_dB(slm1$SPL_1kHz), average_dB(slm2$SPL_1kHz), average_dB(slm3$SPL_1kHz))
 slm_dB <- average_dB(slm_dB)
+slm_pa <- 20e-6 * 10^(slm_dB / 20)
 
 #Append to database slm value both in dB and Pa value
 df$slm_dB <- slm_dB
-df$slm_pa <- 20e-6 * 10^(slm_dB / 20)
+df$slm_pa <- slm_pa
 
 ########################################
 #  3. Calculate calibration offset
@@ -206,8 +214,10 @@ df$calibration_offset_dB <- slm_dB - 20 * log10(digital_rms)
 #  4. Write out results
 #######################################
 
+df
+
 if(file.exists(paste0(output_folder,"/",output_file,".csv"))){
-  df1 <- read.csv(paste0(output_folder,"/",output_file,".csv"))
+  df1 <- read.csv(paste0(output_folder,"/",output_file,".csv"), sep=",")
   df1 <- rbind(df1, df)
   write.csv(df1, paste0(output_folder,"/",output_file,".csv"), row.names = FALSE) 
 } else {
