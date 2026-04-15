@@ -5,7 +5,7 @@ editor: visual
 author: Virginia Iorio
 ---
 
-```{r, warning=FALSE}
+```{r, warning=FALSE, message = FALS}
 library(tidyverse)
 library(readxl)
 library(tuneR)
@@ -19,76 +19,40 @@ write_results <- TRUE
 audio_data_folder <- "G:/Drive condivisi/Sound_recorder_calibration_DB/data/Audio/"
 slm_data_folder <- "G:/Drive condivisi/Sound_recorder_calibration_DB/data/SLM/raw/"
 output_folder <- "G:/Drive condivisi/Sound_recorder_calibration_DB/output"
-output_file <- "calibration_offset_database"
-```
+output_file <- "calibration_offset_database2"
 
-Steps for calibration:
-
-1.  Extract reference value from SLM and transform to linear
-
-2.  Estimate 1 kHz levels from AudioMoth recordings
-
-    a\. Use bespoke TOL function to estimate dB levels at 1 kHz
-
-    b\. Calculate RMS and tranform to linear
-
-3.  Compute sensitivity factor ready to go in PAMGuide
-
-# Calculate per sensor calibration value
-
-Bespoke TOL function:
-
-```{r}
-third_octave_levels <- function(audio, fs, nfft=4096){
-  
-  #Step 1: Welch PSD
-  spec <- pwelch(
-    audio, 
-    window = hanning(nfft),
-    overlap = 0.5,
-    nfft = nfft,
-    fs = fs
-  )
-  
-  freqs <- spec$freq
-  psd <- spec$spec
-  
-  #Step 2: third-octave center frequency
-  center_freqs <- c(25,31.5,10,50,63,80, 100,125,160,200,250,315,400,500,630,800,1000,1250,1600,200,2500,3150,4000,5000,6300,8000,10000,12500,16000,20000)
-  
-  #Step 3: Band edges
-  k <- 2^(1/6)
-  lower <- center_freqs/k
-  upper <- center_freqs*k
-  
-  #Step 4: Integrate PSD in each band
-  levels <- NA
-  for(i in seq_along(center_freqs)){
-    idx <- which(freqs >= lower[i] & freqs <= upper[i])
-    
-    if(length(idx) >0){
-      #band_power <- pracma::trapz(freqs[idx], psd[idx])
-      bandwidth = max(freqs[idx]) - min(freqs[idx]) 
-      band_power <- sum(psd[idx]) * bandwidth
-      levels[i] <- 10 + log10(band_power)
-    } else {
-      levels[i] <- NA
-    }
-  }
-  
-  return(list(freq = center_freqs, levels_df = levels))
-}
-
+#Averag dB function used to avergae across dB transforming them first into linear values.
 average_dB <- function(levels_dB) {
   linear <- 10^(levels_dB / 10)
   mean_linear <- mean(linear, na.rm = TRUE)
   mean_dB <- 10 * log10(mean_linear)
   return(mean_dB)
 }
-
 ```
 
-Find SLM reference test rows:
+#### Overview of calibration steps
+
+In the lab a type 1 Sound Level Meter (slm) and an acoustic sensor (either AudioMoth or SongMeter Micro 2) were exposed to three playbacks of a 1 kHz tonal sound. The trials were conducted at a fixed geometry to allow calibration by substitution.
+
+The following code is used to:
+
+1.  Find SLM reference row (manual step).
+
+2.  Specify calibration metadata (manual step).
+
+3.  Extract linear RMS amplitude from the raw waveform for each trial of the acoustic sensor, applying a 1 kHz band pass filter.
+
+4.  RMS values are averaged in the linear domain.
+
+5.  Extract slm average dB during each trial and across trials (dB are transformed on the linear scale prior to averaging).
+
+6.  Calibration offset is derived by:
+
+    *calibration_offset_dB \<- slm_dB - 20 \* log10(sensor_rms)*
+
+# Calculate per sensor calibration value
+
+## 1. Find SLM reference test rows
 
 -   due to the SLM clock not being always synchronized need to manually check for the clap to correct for the time lag.
 
@@ -97,45 +61,42 @@ Find SLM reference test rows:
 -   Manually check for the clap, it should be a dB peak above the 30 dB, or look for roughly 100 (test with Julia) or 10 (WildSOUND calibration) lines before the actual tests start (i.e. consistent high levels of dB).
 
 ```{r}
-date_test <- "2026-03-19"
-slm_test <- "038"
+date_test <- "2026-04-09"
+slm_test <- "049"
 
 slm_file <- list.files(paste0(slm_data_folder, gsub("-","",date_test)), pattern=paste0(slm_test,".xlsx"), full.names = TRUE)
 
 slm_dat <- readxl::read_excel(slm_file, sheet = "Profilo storico") %>% select("Tempo", "1/3 LZFeq 1000") %>% rename(SPL_1kHz = "1/3 LZFeq 1000")
 ```
 
-Calibration test metadata:
+## 2. Insert calibration test metadata
 
 ```{r}
-calib_test <- "Calib0029"
-sensor <- "SM007"
+calib_test <- "Calib0054"
+sensor <- "SM028"
 
 use_all_three_tests = TRUE
 
-date_test <- "2026-03-19"
+date_test <- "2026-04-09"
 
 # SLM reference test
-test_time <- "10:25:47"
-slm_test <- "038"
+test_time <- "10:16:13"
+slm_test <- "079"
 
-WildSOUND_calibration <- FALSE #TRUE if the short audio file was used
+WildSOUND_calibration <- TRUE #TRUE if the short audio file was used
 ```
 
-Next bit of the code:
-
-1.  Calculate TOL
-2.  Extract dB values from the SLM
-3.  Calculate calibration offset
-4.  Write out results
+## 3. Calculate calibration offset
 
 ```{r}
 
 df <- data.frame(sensor = NA,
                  calibration_test = NA,
-                 sensor_dB = NA,
+                 digital_rms = NA,
                  slm_dB = NA,
-                 calibration_offset = NA)
+                 slm_pa = NA,
+                 sensitivity_pa_per_unit = NA,
+                 calibration_offset_dB = NA)
 
 ########################################
 #  1. Run TOL analysis and extract mean dB level recorded
@@ -152,44 +113,52 @@ for(x in 1:length(kHz1_tests)){
   #Read wav
   wav <- readWave(paste0(audio_data_folder, calib_test, "/", calib_test,"_", sensor, kHz1_tests[x],".wav"))
     
-  #Convert to numeric vector
-  audio <- wav@left
+  #Extract linear RMS amplitude from the raw waveform for each trial.
+  audio <- wav@left / (2^(wav@bit - 1))
   fs <- wav@samp.rate
-    
-  #Run analysis 
-  result <- third_octave_levels(audio, fs)
-    
-  #View results
-  dat.manual <- data.frame(
-    Frequency = result$freq,
-    Level_dB = result$levels_df
-  )
+  
+  #Apply 1 kHz band pass filter
+  bp <- butter(
+    n = 4,
+    w = c(700, 1300) / (fs / 2),
+    type = "pass"
+    )
+  
+  #Filter the data
+  audio_filt <- filtfilt(bp, audio)
+  
+  digital_rms_test <- sqrt(mean(audio_filt^2))
   
   if(x == 1){
-    sensor_dB <- dat.manual$Level_dB[which(dat.manual$Frequency == 1000)]
+    digital_rms <- digital_rms_test
   } else {
-    sensor_dB <- c(sensor_dB, dat.manual$Level_dB[which(dat.manual$Frequency == 1000)])
+    digital_rms <- c(digital_rms, digital_rms_test)
   }
 
 }
 
-#Calculate mean value across the three tests
-SPL_linear <- 10^(sensor_dB/10)
-mean_SPL_linear <- mean(SPL_linear)
-mean_SPL_dB <- 10*log10(mean_SPL_linear)
+#Calculate mean value across the three tests in the linear domain
+digital_rms <- mean(digital_rms)
 
 #Append results to database
 df$sensor <- sensor
 df$calibration_test <- calib_test
-df$sensor_dB <- mean_SPL_dB
+df$digital_rms <- digital_rms
 
 ########################################
-#  2. Extract dB values from the SLM
+#  2. Extract value from the SLM
 #######################################
 
 slm_file <- list.files(paste0(slm_data_folder, gsub("-","",date_test)), pattern=paste0(slm_test,".xlsx"), full.names = TRUE)
 
-slm_dat <- readxl::read_excel(slm_file, sheet = "Profilo storico") %>% select("Tempo", "1/3 LZFeq 1000") %>% rename(SPL_1kHz = "1/3 LZFeq 1000")
+slm_dat <- readxl::read_excel(slm_file, sheet = 5)
+
+# Adjust for some outputs being in Italian and others in English
+if(colnames(slm_dat)[4] == "Tempo"){
+  slm_dat <- slm_data <- select("Tempo", "1/3 LZFeq 1000") %>% rename(SPL_1kHz = "1/3 LZFeq 1000")
+} else {
+  slm_dat <- slm_data %>% select("Time", "1/3 LZFeq 1000") %>% rename(SPL_1kHz = "1/3 LZFeq 1000", Tempo = "Time")
+}
 
 test_time <- paste0(date_test," ",test_time) %>% as.POSIXct(., tz="UTC")
 
@@ -211,24 +180,27 @@ if(WildSOUND_calibration == TRUE){
     
     time3_start <- test_time + 172
     time3_end <- test_time + 191
-
 }
   
+# Extract the recorded values during the three tests
 slm1 <- slm_dat %>% dplyr::filter(Tempo >= time1_start & Tempo <= time1_end) 
 slm2 <- slm_dat %>% dplyr::filter(Tempo >= time2_start & Tempo <= time2_end)
 slm3 <- slm_dat %>% dplyr::filter(Tempo >= time3_start & Tempo <= time3_end)
 
-x_slm <- c(average_dB(slm1$SPL_1kHz), average_dB(slm2$SPL_1kHz), average_dB(slm3$SPL_1kHz))
-x_slm <- average_dB(x_slm)
+# Avergae dB across the three tests
+slm_dB <- c(average_dB(slm1$SPL_1kHz), average_dB(slm2$SPL_1kHz), average_dB(slm3$SPL_1kHz))
+slm_dB <- average_dB(slm_dB)
 
-df$slm_dB <- x_slm
+#Append to database slm value both in dB and Pa value
+df$slm_dB <- slm_dB
+df$slm_pa <- 20e-6 * 10^(slm_dB / 20)
 
 ########################################
 #  3. Calculate calibration offset
 #######################################
 
-offset <- x_slm - mean_SPL_dB
-df$calibration_offset <- offset
+df$sensitivity_pa_per_unit <- slm_pa/digital_rms
+df$calibration_offset_dB <- slm_dB - 20 * log10(digital_rms)
 
 ########################################
 #  4. Write out results
@@ -243,19 +215,3 @@ if(file.exists(paste0(output_folder,"/",output_file,".csv"))){
 }
 
 ```
-
-Next things to check:
-
--   Problem with AMO92 test extraction that needs to be fixed
-
--   Try to run PAMGuide with and without sensitivity correction to compare the results
-
--   Start processing the offset of all the devices tested.
-
-Potential improvements to the code:
-
--   Add read in the calibration database and extract the relevant info for all the files that have extracted audio
-
--   Cross-reference with calibration output to check which ones have been processed already
-
--   Update the offset extraction in the calibration database
